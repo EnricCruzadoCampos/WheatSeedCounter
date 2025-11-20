@@ -48,6 +48,9 @@ api_key = st.sidebar.text_input(
 if not api_key:
     api_key = default_key
 
+workspace_name = st.sidebar.text_input("Workspace", value="enricthings")
+workflow_id = st.sidebar.text_input("Workflow ID", value="detect-count-and-visualize")
+
 st.sidebar.markdown("---")
 st.sidebar.header("Filtros")
 conf_threshold = st.sidebar.slider("Nivel de Confianza (Confidence)", 0.0, 1.0, 0.40, 0.05)
