@@ -11,20 +11,42 @@ st.set_page_config(page_title="Contador de Trigo AI", layout="wide")
 st.title("🌾 Detector y Contador de Trigo con AI")
 st.markdown("Sube una imagen para detectar espigas, filtrar por confianza y ver estadísticas.")
 
-default_key = ""
-if "ROBOFLOW_KEY" in st.secrets:
-    default_key = st.secrets["ROBOFLOW_KEY"]
+# --- GESTIÓN DE SECRETOS (LOGICA MEJORADA) ---
+# Esta función busca la clave en la raíz O dentro de la sección [general]
+def get_secret_key():
+    # 1. Buscar directamente (Formato: CLAVE = "valor")
+    if "ROBOFLOW_KEY" in st.secrets:
+        return st.secrets["ROBOFLOW_KEY"]
+    
+    # 2. Buscar dentro de 'general' (Formato: [general] \n CLAVE = "valor")
+    if "general" in st.secrets and "ROBOFLOW_KEY" in st.secrets["general"]:
+        return st.secrets["general"]["ROBOFLOW_KEY"]
+        
+    return ""
+
+default_key = get_secret_key()
 
 # --- BARRA LATERAL (SIDEBAR) ---
 st.sidebar.header("Configuración")
+
+# DEBUG: ESTO TE DIRÁ SI STREAMLIT ESTÁ LEYENDO EL SECRETO O NO
+# (Borra estas 3 líneas cuando ya funcione)
+if default_key:
+    st.sidebar.success(f"✅ Secreto detectado (Longitud: {len(default_key)})")
+else:
+    st.sidebar.error("❌ No se detecta el secreto en st.secrets")
+# ---------------------------------------------------------
+
 api_key = st.sidebar.text_input(
     "Roboflow API Key", 
     value=default_key, 
     type="password",
     help="Si no tienes una, deja la que viene por defecto (usa la cuenta del creador)."
 )
-workspace_name = st.sidebar.text_input("Workspace", value="enricthings")
-workflow_id = st.sidebar.text_input("Workflow ID", value="detect-count-and-visualize")
+
+# Si el usuario borra el campo manualmente, usamos la default
+if not api_key:
+    api_key = default_key
 
 st.sidebar.markdown("---")
 st.sidebar.header("Filtros")
@@ -33,13 +55,14 @@ iou_threshold = st.sidebar.slider("Superposición (Overlap / IoU)", 0.0, 1.0, 0.
 
 # --- FUNCIONES ---
 
-# Usamos @st.cache_data para NO llamar a la API cada vez que mueves un slider
 @st.cache_data
 def get_roboflow_predictions(image_bytes, _api_key, _workspace, _workflow):
+    # Protección extra: Si la clave llega vacía, lanzamos error antes de llamar a la API
+    if not _api_key:
+        raise ValueError("La API Key está vacía. Revisa los 'Secrets' o escribe una manualmente.")
+
     client = InferenceHTTPClient(api_url="https://serverless.roboflow.com", api_key=_api_key)
     
-    # Guardamos temporalmente para enviar (la librería inference pide archivo o ruta)
-    # Un truco para enviar bytes directamente sería usar base64, pero guardarlo es seguro en local
     with open("temp_image.jpg", "wb") as f:
         f.write(image_bytes)
 
@@ -50,11 +73,9 @@ def get_roboflow_predictions(image_bytes, _api_key, _workspace, _workflow):
         use_cache=True
     )
     
-    # Limpieza de datos (tu lógica probada)
     data = result[0]
     predictions = []
     
-    # Extracción robusta
     raw_preds = data.get('predictions', [])
     if isinstance(raw_preds, dict) and 'predictions' in raw_preds:
         predictions = raw_preds['predictions']
@@ -70,7 +91,6 @@ def draw_and_count(image, predictions, conf_th, iou_th):
     confidences = []
     labels = []
     
-    # 1. Filtrar por confianza
     for p in predictions:
         conf = p.get('confidence', 0)
         if conf >= conf_th:
@@ -86,24 +106,18 @@ def draw_and_count(image, predictions, conf_th, iou_th):
             confidences.append(float(conf))
             labels.append(p.get('class', 'Obj'))
             
-    # 2. NMS (Overlap)
     indices = []
     if boxes:
         indices = cv2.dnn.NMSBoxes(boxes, confidences, 0.0, iou_th)
         if hasattr(indices, 'flatten'):
             indices = indices.flatten()
             
-    # 3. Dibujar y contar finales
     final_labels = []
     for i in indices:
         box = boxes[i]
         lbl = labels[i]
-        
         final_labels.append(lbl)
-        
-        # Dibujar rectángulo verde
         cv2.rectangle(img_copy, (box[0], box[1]), (box[0]+box[2], box[1]+box[3]), (0, 255, 0), 4)
-        # Texto
         cv2.putText(img_copy, lbl, (box[0], box[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
         
     return img_copy, final_labels
@@ -113,38 +127,33 @@ def draw_and_count(image, predictions, conf_th, iou_th):
 uploaded_file = st.file_uploader("Elige una imagen...", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Leer imagen para OpenCV
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
     opencv_image = cv2.imdecode(file_bytes, 1)
-    opencv_image = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2RGB) # Corregir color
+    opencv_image = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2RGB)
     
-    # Resetear el puntero del archivo para leer bytes de nuevo si es necesario
     uploaded_file.seek(0)
     
-    with st.spinner('Consultando a Roboflow...'):
-        try:
-            # Llamada a la API (Solo ocurre una vez por imagen gracias al caché)
-            preds = get_roboflow_predictions(uploaded_file.getvalue(), api_key, workspace_name, workflow_id)
-            
-            # Procesado local (Ocurre cada vez que mueves el slider)
-            result_img, final_labels = draw_and_count(opencv_image, preds, conf_threshold, iou_threshold)
-            
-            # COLUMNAS: Izquierda (Imagen), Derecha (Datos)
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                st.image(result_img, caption=f"Detección Visual ({len(final_labels)} objetos)", use_container_width=True)
+    if st.button("🔍 Analizar Imagen"):
+        with st.spinner('Consultando a Roboflow...'):
+            try:
+                preds = get_roboflow_predictions(uploaded_file.getvalue(), api_key, workspace_name, workflow_id)
+                result_img, final_labels = draw_and_count(opencv_image, preds, conf_threshold, iou_threshold)
                 
-            with col2:
-                st.subheader("📊 Estadísticas")
-                st.metric(label="Total Detectado", value=len(final_labels))
+                col1, col2 = st.columns([2, 1])
                 
-                if final_labels:
-                    counts = Counter(final_labels)
-                    df = pd.DataFrame(counts.items(), columns=['Clase', 'Cantidad']).set_index('Clase')
-                    st.dataframe(df, use_container_width=True)
-                else:
-                    st.warning("No hay objetos con estos filtros.")
+                with col1:
+                    st.image(result_img, caption=f"Detección Visual ({len(final_labels)} objetos)", use_container_width=True)
                     
-        except Exception as e:
-            st.error(f"Ocurrió un error: {e}")
+                with col2:
+                    st.subheader("📊 Estadísticas")
+                    st.metric(label="Total Detectado", value=len(final_labels))
+                    
+                    if final_labels:
+                        counts = Counter(final_labels)
+                        df = pd.DataFrame(counts.items(), columns=['Clase', 'Cantidad']).set_index('Clase')
+                        st.dataframe(df, use_container_width=True)
+                    else:
+                        st.warning("No hay objetos con estos filtros.")
+                        
+            except Exception as e:
+                st.error(f"Ocurrió un error: {e}")
