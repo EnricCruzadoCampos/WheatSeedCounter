@@ -8,7 +8,7 @@ from collections import Counter
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Contador de Trigo AI", layout="wide")
 
-st.title("🌾 Contador y Clasificador de Semillas de Trigo con AI 🤖")
+st.title("🌾 Contador y Clasificador de Semillas de Trigo con AI 🔮")
 st.markdown("Sube una imagen para detectar espigas, filtrar por confianza y ver estadísticas.")
 
 # --- CONFIGURACIÓN INTERNA (INVISIBLE PARA EL USUARIO) ---
